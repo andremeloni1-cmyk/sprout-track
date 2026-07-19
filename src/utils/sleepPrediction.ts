@@ -106,6 +106,11 @@ export interface PredictNextSleepInput {
   ageMonths: number;
   /** IANA timezone used to bucket sleeps into local days (e.g. 'America/New_York'). */
   timeZone: string;
+  /**
+   * Optional per-baby average wake window (minutes). When set, it replaces the
+   * age-based baseline as the prior the prediction personalizes from.
+   */
+  wakeWindowOverrideMinutes?: number | null;
   /** Optional tuning overrides (primarily for tests). */
   options?: Partial<PredictionTuning>;
 }
@@ -332,7 +337,12 @@ interface PredictionContext {
 
 function buildContext(input: PredictNextSleepInput, tuning: PredictionTuning): PredictionContext {
   const { sleeps, now, ageMonths } = input;
-  const baseline = ageBaselineWakeWindowMinutes(ageMonths);
+  // A per-baby override replaces the age baseline as the prior; the engine still
+  // personalizes toward the baby's own logged wake windows on top of it.
+  const baseline =
+    input.wakeWindowOverrideMinutes != null && input.wakeWindowOverrideMinutes > 0
+      ? input.wakeWindowOverrideMinutes
+      : ageBaselineWakeWindowMinutes(ageMonths);
   const capMinutes = Math.max(360, baseline * 2.5);
 
   const historyStart = now - tuning.historyDays * DAY_MS;

@@ -726,7 +726,15 @@ export async function checkSleepWindowNotifications(): Promise<number> {
             caretakerId: true,
           },
         },
-        baby: { select: { id: true, firstName: true, lastName: true, birthDate: true } },
+        baby: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            birthDate: true,
+            wakeWindowOverrideMinutes: true,
+          },
+        },
       },
     });
 
@@ -763,6 +771,7 @@ export async function checkSleepWindowNotifications(): Promise<number> {
         now,
         ageMonths: ageInMonths(baby.birthDate.getTime(), now),
         timeZone,
+        wakeWindowOverrideMinutes: baby.wakeWindowOverrideMinutes,
       });
 
       if (prediction.state !== 'prediction') continue;

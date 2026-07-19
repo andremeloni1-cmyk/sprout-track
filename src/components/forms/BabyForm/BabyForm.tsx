@@ -45,6 +45,7 @@ const defaultFormData = {
   feedWarningTime: '03:00',
   diaperWarningTime: '02:00',
   feedTimerFrom: 'start',
+  wakeWindowOverrideMinutes: '',
 };
 
 export default function BabyForm({
@@ -77,6 +78,10 @@ export default function BabyForm({
         feedWarningTime: baby.feedWarningTime || '03:00',
         diaperWarningTime: baby.diaperWarningTime || '02:00',
         feedTimerFrom: (baby as any).feedTimerFrom || 'start',
+        wakeWindowOverrideMinutes:
+          (baby as any).wakeWindowOverrideMinutes != null
+            ? String((baby as any).wakeWindowOverrideMinutes)
+            : '',
       });
     } else if (!isOpen && !isSubmitting) {
       setFormData(defaultFormData);
@@ -108,6 +113,10 @@ export default function BabyForm({
           id: baby?.id,
           birthDate: formData.birthDate,
           gender: formData.gender as Gender,
+          wakeWindowOverrideMinutes:
+            formData.wakeWindowOverrideMinutes === ''
+              ? null
+              : parseInt(formData.wakeWindowOverrideMinutes, 10),
         }),
       });
 
@@ -256,6 +265,27 @@ export default function BabyForm({
                 required
               />
             </div>
+          </div>
+
+          <div>
+            <label htmlFor={`${formId}-wake-window-override`} className="form-label">
+              {t('Wake window override (minutes)')}
+            </label>
+            <Input
+              id={`${formId}-wake-window-override`}
+              type="number"
+              min={20}
+              max={720}
+              value={formData.wakeWindowOverrideMinutes}
+              onChange={(e) =>
+                setFormData({ ...formData, wakeWindowOverrideMinutes: e.target.value })
+              }
+              className="w-full"
+              placeholder={t('Auto (age-based)')}
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              {t("Optional — this baby's typical wake window for sleep predictions. Leave blank to use age-based defaults.")}
+            </p>
           </div>
           <div>
             <label htmlFor={`${formId}-feed-timer-from`} className="form-label">{t('Feed timer counts from')}</label>
