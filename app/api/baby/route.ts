@@ -6,6 +6,19 @@ import { toUTC, formatForResponse } from '../utils/timezone';
 import { withAuthContext, AuthResult } from '../utils/auth';
 import { checkWritePermission } from '../utils/writeProtection';
 
+/**
+ * Coerce a client-supplied wake-window override into a safe value.
+ * `undefined` -> leave unchanged; `null`/`''` -> clear; otherwise an integer
+ * clamped to a sane range (minutes).
+ */
+function sanitizeWakeWindowOverride(value: unknown): number | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || value === '') return null;
+  const n = typeof value === 'number' ? value : parseInt(String(value), 10);
+  if (!Number.isFinite(n)) return null;
+  return Math.max(20, Math.min(720, Math.round(n)));
+}
+
 async function handlePost(req: NextRequest, authContext: AuthResult) {
   // Check write permissions for expired accounts
   const writeCheck = checkWritePermission(authContext);
@@ -34,6 +47,7 @@ async function handlePost(req: NextRequest, authContext: AuthResult) {
       data: {
         ...body,
         birthDate: toUTC(body.birthDate),
+        wakeWindowOverrideMinutes: sanitizeWakeWindowOverride(body.wakeWindowOverrideMinutes),
         familyId: targetFamilyId, // Set family ID from trusted context or setup auth
       },
     });
@@ -115,6 +129,7 @@ async function handlePut(req: NextRequest, authContext: AuthResult) {
       data: {
         ...updateData,
         birthDate: updateData.birthDate ? toUTC(updateData.birthDate) : existingBaby.birthDate,
+        wakeWindowOverrideMinutes: sanitizeWakeWindowOverride(updateData.wakeWindowOverrideMinutes),
       },
     });
 

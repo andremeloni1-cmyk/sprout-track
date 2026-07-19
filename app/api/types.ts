@@ -93,6 +93,7 @@ export interface BabyCreate {
   feedWarningTime?: string;
   diaperWarningTime?: string;
   feedTimerFrom?: string;
+  wakeWindowOverrideMinutes?: number | null;
 }
 
 export interface BabyUpdate extends Partial<BabyCreate> {

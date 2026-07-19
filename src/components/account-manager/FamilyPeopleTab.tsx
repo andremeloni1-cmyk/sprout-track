@@ -495,6 +495,7 @@ const FamilyPeopleTab: React.FC<FamilyPeopleTabProps> = ({
           deletedAt: null,
           familyId: familyData.id,
           feedTimerFrom: (selectedBaby as any).feedTimerFrom || 'start',
+          wakeWindowOverrideMinutes: (selectedBaby as any).wakeWindowOverrideMinutes ?? null,
         } : null}
         onBabyChange={handleBabyFormClose}
       />

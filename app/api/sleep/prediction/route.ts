@@ -42,7 +42,7 @@ async function handleGet(req: NextRequest, authContext: AuthResult) {
     // Verify the baby belongs to the caller's family before reading its data.
     const baby = await prisma.baby.findFirst({
       where: { id: babyId, familyId: userFamilyId },
-      select: { birthDate: true },
+      select: { birthDate: true, wakeWindowOverrideMinutes: true },
     });
     if (!baby) {
       return NextResponse.json<ApiResponse<null>>(
@@ -76,6 +76,7 @@ async function handleGet(req: NextRequest, authContext: AuthResult) {
       now,
       ageMonths: ageInMonths(baby.birthDate.getTime(), now),
       timeZone: getSystemTimezone(),
+      wakeWindowOverrideMinutes: baby.wakeWindowOverrideMinutes,
     });
 
     return NextResponse.json<ApiResponse<DaySchedule>>({ success: true, data: prediction });

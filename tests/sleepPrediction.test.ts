@@ -314,6 +314,47 @@ describe('predictDaySchedule', () => {
   });
 });
 
+describe('per-baby wake-window override', () => {
+  const now = Date.UTC(2026, 0, 15, 9, 0, 0);
+  const lastWake = Date.UTC(2026, 0, 15, 8, 30, 0);
+  const sleeps: SleepSample[] = [
+    { start: Date.UTC(2026, 0, 14, 19, 0, 0), end: lastWake, type: 'NIGHT_SLEEP' },
+  ];
+
+  it('uses the override as the baseline instead of the age default', () => {
+    const withOverride = predictNextSleep({
+      sleeps,
+      now,
+      ageMonths: 8,
+      timeZone: 'UTC',
+      wakeWindowOverrideMinutes: 240,
+    });
+    const withoutOverride = predictNextSleep({ sleeps, now, ageMonths: 8, timeZone: 'UTC' });
+    expect(withOverride.state).toBe('prediction');
+    expect(withoutOverride.state).toBe('prediction');
+    if (withOverride.state !== 'prediction' || withoutOverride.state !== 'prediction') return;
+    expect(withOverride.basis.baselineWakeWindowMinutes).toBe(240);
+    expect(withoutOverride.basis.baselineWakeWindowMinutes).toBe(ageBaselineWakeWindowMinutes(8));
+    // A larger baseline pushes the predicted window later.
+    expect(withOverride.basis.predictedWakeWindowMinutes).toBeGreaterThan(
+      withoutOverride.basis.predictedWakeWindowMinutes,
+    );
+  });
+
+  it('ignores a null override and falls back to the age baseline', () => {
+    const r = predictNextSleep({
+      sleeps,
+      now,
+      ageMonths: 8,
+      timeZone: 'UTC',
+      wakeWindowOverrideMinutes: null,
+    });
+    expect(r.state).toBe('prediction');
+    if (r.state !== 'prediction') return;
+    expect(r.basis.baselineWakeWindowMinutes).toBe(ageBaselineWakeWindowMinutes(8));
+  });
+});
+
 describe('napDebtFactor', () => {
   it('is neutral with no naps yet today', () => {
     expect(napDebtFactor([], 90)).toBe(1);
