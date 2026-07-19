@@ -30,4 +30,12 @@ export const sleepPredictionStyles = {
   meta: 'text-xs opacity-80',
   hint:
     'sleep-prediction-hint flex items-center gap-2 rounded-2xl border border-dashed border-slate-200 px-4 py-2.5 my-2 text-xs text-slate-500',
+  // "Later today" projected schedule
+  schedule:
+    'sleep-prediction-schedule -mt-1 mb-2 rounded-2xl border border-slate-100 bg-slate-50/70 px-4 py-2 text-slate-600',
+  scheduleTitle: 'mb-1 text-[11px] font-medium uppercase tracking-wide opacity-60',
+  scheduleList: 'flex flex-col gap-1',
+  scheduleItem: 'flex items-center gap-2 text-xs',
+  scheduleKind: 'font-medium',
+  scheduleTime: 'ml-auto tabular-nums opacity-70',
 } as const;

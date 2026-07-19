@@ -1,7 +1,8 @@
 # SleepPredictionCard
 
 A dashboard card that shows a "SweetSpot"-style predicted **window** for the
-baby's next sleep (nap or bedtime), inspired by Huckleberry's SweetSpot.
+baby's next sleep (nap or bedtime), inspired by Huckleberry's SweetSpot, plus a
+compact **"Later today"** projection of the remaining naps and bedtime.
 
 ## Usage
 
@@ -21,7 +22,10 @@ import { SleepPredictionCard } from '@/src/components/SleepPrediction';
 
 ## Behavior
 
-- Fetches `GET /api/sleep/prediction?babyId=...` (JWT via `Authorization` header).
+- Fetches `GET /api/sleep/prediction?babyId=...` (JWT via `Authorization`
+  header), which returns `{ next, schedule }`.
+- Renders the `next` window as the main card and the rest of `schedule` (the
+  remaining naps + bedtime for today) as a compact "Later today" list.
 - Derives the live status/countdown client-side from the returned absolute
   window, ticking every 30s, and refetches every 5 minutes so other caretakers'
   logged sleeps appear without a manual refresh.

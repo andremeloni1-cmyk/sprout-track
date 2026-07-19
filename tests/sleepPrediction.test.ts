@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   ageBaselineWakeWindowMinutes,
   ageInMonths,
+  ageNapDurationMinutes,
   computeWakeWindows,
+  estimateNapDurationMinutes,
   expectedNapsPerDay,
   localDayKey,
+  predictDaySchedule,
   predictNextSleep,
   type SleepSample,
 } from '@/src/utils/sleepPrediction';
@@ -212,5 +215,73 @@ describe('predictNextSleep', () => {
     expect(result.state).toBe('prediction');
     if (result.state !== 'prediction') return;
     expect(result.kind).toBe('bedtime');
+  });
+});
+
+describe('estimateNapDurationMinutes', () => {
+  const now = Date.UTC(2026, 0, 15, 12, 0, 0);
+
+  it('falls back to the age default with fewer than 3 recent naps', () => {
+    const sleeps = [sleep(now - 3 * HOUR, 50, 'NAP')];
+    expect(estimateNapDurationMinutes(sleeps, now, 8, 14)).toBe(ageNapDurationMinutes(8));
+  });
+
+  it('uses the mean of recent nap durations once there are enough', () => {
+    const sleeps = [
+      sleep(now - 3 * 24 * HOUR, 60, 'NAP'),
+      sleep(now - 2 * 24 * HOUR, 60, 'NAP'),
+      sleep(now - 1 * 24 * HOUR, 90, 'NAP'),
+    ];
+    expect(estimateNapDurationMinutes(sleeps, now, 8, 14)).toBe(70);
+  });
+});
+
+describe('predictDaySchedule', () => {
+  it('returns an empty schedule when there is no prediction', () => {
+    const now = Date.UTC(2026, 0, 15, 9, 0, 0);
+    const result = predictDaySchedule({ sleeps: [], now, ageMonths: 8, timeZone: 'UTC' });
+    expect(result.next.state).toBe('insufficient');
+    expect(result.schedule).toEqual([]);
+  });
+
+  it('projects naps then bedtime for the rest of the day, in order', () => {
+    const now = Date.UTC(2026, 0, 15, 7, 0, 0);
+    // 12mo -> 2 naps/day; night sleep ended this morning, no naps yet.
+    const sleeps: SleepSample[] = [
+      { start: Date.UTC(2026, 0, 14, 19, 0, 0), end: Date.UTC(2026, 0, 15, 6, 30, 0), type: 'NIGHT_SLEEP' },
+    ];
+    const { next, schedule } = predictDaySchedule({ sleeps, now, ageMonths: 12, timeZone: 'UTC' });
+
+    expect(next.state).toBe('prediction');
+    // nap, nap, bedtime
+    expect(schedule.map((s) => s.kind)).toEqual(['nap', 'nap', 'bedtime']);
+    // first entry mirrors `next`
+    if (next.state === 'prediction') expect(schedule[0].center).toBe(next.center);
+    // chronological, each after the previous
+    for (let i = 1; i < schedule.length; i++) {
+      expect(schedule[i].center).toBeGreaterThan(schedule[i - 1].center);
+      expect(schedule[i].windowStart).toBeLessThan(schedule[i].windowEnd);
+    }
+    // all windows land on the same local day
+    for (const s of schedule) {
+      expect(localDayKey(s.center, 'UTC')).toBe('2026-01-15');
+    }
+  });
+
+  it('honors the maxScheduleSleeps cap', () => {
+    const now = Date.UTC(2026, 0, 15, 7, 0, 0);
+    // Young baby (many naps) so bedtime is far off; cap the projection at 3.
+    const sleeps: SleepSample[] = [
+      { start: Date.UTC(2026, 0, 15, 5, 30, 0), end: Date.UTC(2026, 0, 15, 6, 30, 0), type: 'NIGHT_SLEEP' },
+    ];
+    const { schedule } = predictDaySchedule({
+      sleeps,
+      now,
+      ageMonths: 2,
+      timeZone: 'UTC',
+      options: { maxScheduleSleeps: 3 },
+    });
+    expect(schedule.length).toBe(3);
+    expect(schedule.every((s) => s.kind === 'nap')).toBe(true);
   });
 });
