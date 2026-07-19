@@ -106,6 +106,15 @@ export function SleepPredictionCard({ babyId, refreshTrigger, className }: Sleep
 
   const Icon = status === 'overdue' ? AlarmClock : kind === 'bedtime' ? Moon : Sun;
 
+  // Explain a sleep-debt shift when the window moved meaningfully off the norm.
+  const adjustmentFactor = prediction.basis.napAdjustmentFactor;
+  const adjustmentNote =
+    adjustmentFactor <= 0.95
+      ? t('Nudged earlier after short naps')
+      : adjustmentFactor >= 1.05
+        ? t('Nudged later after long naps')
+        : null;
+
   // Rest of today's projected sleeps (the first entry mirrors the card above).
   const laterToday = data.schedule.slice(1);
 
@@ -118,6 +127,7 @@ export function SleepPredictionCard({ babyId, refreshTrigger, className }: Sleep
         <div className={s.body}>
           <span className={s.label}>{label}</span>
           <span className={s.window}>{windowText}</span>
+          {adjustmentNote && <span className={s.adjustment}>{adjustmentNote}</span>}
         </div>
         <div className={s.countdown}>
           <div className={s.countdownValue}>{countdownMain}</div>
