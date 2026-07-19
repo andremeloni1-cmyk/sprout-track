@@ -4,8 +4,9 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Moon, Sun, AlarmClock } from 'lucide-react';
 import { cn } from '@/src/lib/utils';
 import { useLocalization } from '@/src/context/localization';
+import type { DaySchedule } from '@/src/utils/sleepPrediction';
 import { sleepPredictionCard, sleepPredictionStyles as s } from './sleep-prediction.styles';
-import { SleepPredictionCardProps, SleepPrediction } from './sleep-prediction.types';
+import { SleepPredictionCardProps } from './sleep-prediction.types';
 import './sleep-prediction.css';
 
 /** Format an epoch-ms instant as a short local clock time (e.g. "2:05 PM"). */
@@ -24,13 +25,14 @@ function formatCountdown(mins: number, t: (key: string) => string): string {
 
 /**
  * Dashboard card showing the predicted "sweet spot" window for the baby's next
- * sleep. Fetches from /api/sleep/prediction and derives the live countdown /
- * status from the returned window so it stays current between refetches. Renders
- * nothing while the baby is asleep or when there isn't enough data yet.
+ * sleep, plus the projected rest of today's naps and bedtime. Fetches from
+ * /api/sleep/prediction and derives the live countdown / status from the
+ * returned window so it stays current between refetches. Renders nothing while
+ * the baby is asleep or when there isn't enough data yet.
  */
 export function SleepPredictionCard({ babyId, refreshTrigger, className }: SleepPredictionCardProps) {
   const { t } = useLocalization();
-  const [prediction, setPrediction] = useState<SleepPrediction | null>(null);
+  const [data, setData] = useState<DaySchedule | null>(null);
   const [nowTs, setNowTs] = useState<number>(() => Date.now());
 
   const load = useCallback(async () => {
@@ -41,8 +43,8 @@ export function SleepPredictionCard({ babyId, refreshTrigger, className }: Sleep
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!res.ok) return;
-      const data = await res.json();
-      if (data?.success) setPrediction(data.data as SleepPrediction);
+      const json = await res.json();
+      if (json?.success) setData(json.data as DaySchedule);
     } catch {
       // Non-critical feature — stay silent on failure.
     }
@@ -63,7 +65,8 @@ export function SleepPredictionCard({ babyId, refreshTrigger, className }: Sleep
     };
   }, [load]);
 
-  if (!prediction) return null;
+  if (!data) return null;
+  const prediction = data.next;
 
   if (prediction.state === 'insufficient') {
     return (
@@ -103,19 +106,45 @@ export function SleepPredictionCard({ babyId, refreshTrigger, className }: Sleep
 
   const Icon = status === 'overdue' ? AlarmClock : kind === 'bedtime' ? Moon : Sun;
 
+  // Rest of today's projected sleeps (the first entry mirrors the card above).
+  const laterToday = data.schedule.slice(1);
+
   return (
-    <div className={cn(sleepPredictionCard({ status }), className)} role="status" aria-live="polite">
-      <div className={s.iconWrap}>
-        <Icon className="h-5 w-5" aria-hidden="true" />
+    <div className={cn(className)}>
+      <div className={sleepPredictionCard({ status })} role="status" aria-live="polite">
+        <div className={s.iconWrap}>
+          <Icon className="h-5 w-5" aria-hidden="true" />
+        </div>
+        <div className={s.body}>
+          <span className={s.label}>{label}</span>
+          <span className={s.window}>{windowText}</span>
+        </div>
+        <div className={s.countdown}>
+          <div className={s.countdownValue}>{countdownMain}</div>
+          <div className={s.meta}>{countdownSub}</div>
+        </div>
       </div>
-      <div className={s.body}>
-        <span className={s.label}>{label}</span>
-        <span className={s.window}>{windowText}</span>
-      </div>
-      <div className={s.countdown}>
-        <div className={s.countdownValue}>{countdownMain}</div>
-        <div className={s.meta}>{countdownSub}</div>
-      </div>
+
+      {laterToday.length > 0 && (
+        <div className={s.schedule}>
+          <div className={s.scheduleTitle}>{t('Later today')}</div>
+          <ul className={s.scheduleList}>
+            {laterToday.map((item, i) => {
+              const RowIcon = item.kind === 'bedtime' ? Moon : Sun;
+              const rowLabel = item.kind === 'bedtime' ? t('Bedtime') : t('Nap');
+              return (
+                <li key={i} className={s.scheduleItem}>
+                  <RowIcon className="h-3.5 w-3.5 shrink-0 opacity-70" aria-hidden="true" />
+                  <span className={s.scheduleKind}>{rowLabel}</span>
+                  <span className={s.scheduleTime}>
+                    {formatClock(item.windowStart)} – {formatClock(item.windowEnd)}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }

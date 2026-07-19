@@ -36,3 +36,9 @@ html.dark .sleep-prediction-hint {
   border-color: rgba(148, 163, 184, 0.25);
   color: #94a3b8;
 }
+
+html.dark .sleep-prediction-schedule {
+  border-color: rgba(148, 163, 184, 0.15);
+  background-color: rgba(30, 41, 59, 0.55);
+  color: #cbd5e1;
+}

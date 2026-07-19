@@ -1,8 +1,9 @@
 /**
  * Sleep prediction ("SweetSpot"-style) engine.
  *
- * Predicts the optimal window for a baby's next sleep (nap or bedtime) from
- * their logged sleep history, blended with age-appropriate wake-window norms.
+ * Predicts the optimal window for a baby's next sleep (nap or bedtime), and the
+ * full remaining-day schedule, from their logged sleep history blended with
+ * age-appropriate wake-window norms.
  *
  * The module is intentionally free of any framework/database/Prisma imports so
  * the logic can be unit-tested in isolation. All times are epoch milliseconds
@@ -23,15 +24,18 @@ export interface SleepSample {
 
 export type SleepPredictionConfidence = 'low' | 'medium' | 'high';
 
-export interface SleepPredictionResult {
-  state: 'prediction';
-  /** Whether the next sleep is expected to be a nap or the night's bedtime. */
+/** A single predicted sleep window (used for the day schedule). */
+export interface PredictedSleep {
   kind: 'nap' | 'bedtime';
   /** Optimal window bounds (epoch ms). */
   windowStart: number;
   windowEnd: number;
   /** Window midpoint — the single best estimate (epoch ms). */
   center: number;
+}
+
+export interface SleepPredictionResult extends PredictedSleep {
+  state: 'prediction';
   /** Where `now` sits relative to the window. */
   status: 'upcoming' | 'now' | 'overdue';
   /** Minutes from now until the window opens (<= 0 once inside/after it). */
@@ -55,6 +59,16 @@ export type SleepPrediction =
   | { state: 'asleep'; since: number }
   | { state: 'insufficient' };
 
+/** Next sleep plus the projected remaining-day schedule. */
+export interface DaySchedule {
+  next: SleepPrediction;
+  /**
+   * Predicted sleeps for the rest of the local day, earliest first. The first
+   * entry mirrors `next` when `next` is a prediction; empty otherwise.
+   */
+  schedule: PredictedSleep[];
+}
+
 export interface PredictionTuning {
   /** How many days of history to personalize from. */
   historyDays: number;
@@ -64,6 +78,8 @@ export interface PredictionTuning {
   minHalfWidthMin: number;
   maxHalfWidthMin: number;
   defaultHalfWidthMin: number;
+  /** Safety cap on how many sleeps a day schedule may project. */
+  maxScheduleSleeps: number;
 }
 
 export const DEFAULT_TUNING: PredictionTuning = {
@@ -72,6 +88,7 @@ export const DEFAULT_TUNING: PredictionTuning = {
   minHalfWidthMin: 10,
   maxHalfWidthMin: 30,
   defaultHalfWidthMin: 20,
+  maxScheduleSleeps: 8,
 };
 
 export interface PredictNextSleepInput {
@@ -124,6 +141,14 @@ export function expectedNapsPerDay(ageMonths: number): number {
   return 1;
 }
 
+/** Age-appropriate typical nap length in minutes (fallback for scheduling). */
+export function ageNapDurationMinutes(ageMonths: number): number {
+  if (ageMonths < 6) return 45;
+  if (ageMonths < 12) return 75;
+  if (ageMonths < 18) return 90;
+  return 120;
+}
+
 function mean(xs: number[]): number {
   if (xs.length === 0) return 0;
   return xs.reduce((a, b) => a + b, 0) / xs.length;
@@ -170,6 +195,98 @@ export function localDayKey(ms: number, timeZone: string): string {
 }
 
 /**
+ * Estimate a typical nap length (minutes) from recent naps, falling back to an
+ * age-appropriate default. Used to advance the simulated day schedule.
+ */
+export function estimateNapDurationMinutes(
+  sleeps: SleepSample[],
+  now: number,
+  ageMonths: number,
+  historyDays: number,
+): number {
+  const historyStart = now - historyDays * DAY_MS;
+  const durations = sleeps
+    .filter((s) => s.type === 'NAP' && s.end != null && s.start >= historyStart)
+    .map((s) => ((s.end as number) - s.start) / MINUTE_MS)
+    .filter((d) => d >= 10 && d <= 6 * 60);
+  if (durations.length >= 3) return Math.round(mean(durations));
+  return ageNapDurationMinutes(ageMonths);
+}
+
+/** Wake windows grow across the day; the pre-bedtime one is the longest. */
+function positionFactor(napsBefore: number, expectedNaps: number, isBedtime: boolean): number {
+  if (isBedtime) return 1.25;
+  const denom = Math.max(1, expectedNaps - 1);
+  return 0.9 + 0.25 * clamp(napsBefore / denom, 0, 1); // 0.90 -> 1.15
+}
+
+/** Precomputed, history-derived context shared by every window in a day. */
+interface PredictionContext {
+  baseline: number;
+  capMinutes: number;
+  blendedBase: number;
+  personalMean: number;
+  personalStd: number;
+  sampleCount: number;
+  personalWeight: number;
+  expectedNaps: number;
+  halfWidthMin: number;
+}
+
+function buildContext(input: PredictNextSleepInput, tuning: PredictionTuning): PredictionContext {
+  const { sleeps, now, ageMonths } = input;
+  const baseline = ageBaselineWakeWindowMinutes(ageMonths);
+  const capMinutes = Math.max(360, baseline * 2.5);
+
+  const historyStart = now - tuning.historyDays * DAY_MS;
+  const recent = sleeps.filter((s) => s.end != null && (s.end as number) >= historyStart);
+  const windows = computeWakeWindows(recent, capMinutes);
+  const sampleCount = windows.length;
+  const personalMean = sampleCount > 0 ? mean(windows) : baseline;
+  const personalStd = stdDev(windows);
+
+  const personalWeight = sampleCount / (sampleCount + tuning.priorStrength);
+  const blendedBase = personalWeight * personalMean + (1 - personalWeight) * baseline;
+
+  const halfWidthMin = clamp(
+    personalStd > 0 ? personalStd : tuning.defaultHalfWidthMin,
+    tuning.minHalfWidthMin,
+    tuning.maxHalfWidthMin,
+  );
+
+  return {
+    baseline,
+    capMinutes,
+    blendedBase,
+    personalMean,
+    personalStd,
+    sampleCount,
+    personalWeight,
+    expectedNaps: expectedNapsPerDay(ageMonths),
+    halfWidthMin,
+  };
+}
+
+/** Build a single sleep window given the wake start and naps already taken. */
+function buildWindow(
+  lastWakeAt: number,
+  napsBefore: number,
+  ctx: PredictionContext,
+): PredictedSleep & { predictedWakeWindowMinutes: number } {
+  const isBedtime = napsBefore >= ctx.expectedNaps;
+  const factor = positionFactor(napsBefore, ctx.expectedNaps, isBedtime);
+  const predictedWakeWindow = clamp(ctx.blendedBase * factor, 20, ctx.capMinutes);
+  const center = lastWakeAt + predictedWakeWindow * MINUTE_MS;
+  return {
+    kind: isBedtime ? 'bedtime' : 'nap',
+    center,
+    windowStart: center - ctx.halfWidthMin * MINUTE_MS,
+    windowEnd: center + ctx.halfWidthMin * MINUTE_MS,
+    predictedWakeWindowMinutes: Math.round(predictedWakeWindow),
+  };
+}
+
+/**
  * Predict the optimal window for the next sleep.
  *
  * Returns `{ state: 'asleep' }` while a sleep is ongoing, `{ state:
@@ -178,7 +295,7 @@ export function localDayKey(ms: number, timeZone: string): string {
  */
 export function predictNextSleep(input: PredictNextSleepInput): SleepPrediction {
   const tuning: PredictionTuning = { ...DEFAULT_TUNING, ...input.options };
-  const { sleeps, now, ageMonths, timeZone } = input;
+  const { sleeps, now, timeZone } = input;
 
   if (!sleeps || sleeps.length === 0) return { state: 'insufficient' };
 
@@ -192,81 +309,92 @@ export function predictNextSleep(input: PredictNextSleepInput): SleepPrediction 
   if (completed.length === 0) return { state: 'insufficient' };
 
   const lastWakeAt = completed[completed.length - 1].end as number;
+  const ctx = buildContext(input, tuning);
 
-  const baseline = ageBaselineWakeWindowMinutes(ageMonths);
-  const capMinutes = Math.max(360, baseline * 2.5);
-
-  // Personalize from recent history.
-  const historyStart = now - tuning.historyDays * DAY_MS;
-  const recent = sleeps.filter((s) => s.end != null && (s.end as number) >= historyStart);
-  const windows = computeWakeWindows(recent, capMinutes);
-  const sampleCount = windows.length;
-  const personalMean = sampleCount > 0 ? mean(windows) : baseline;
-  const personalStd = stdDev(windows);
-
-  // Shrink personal estimate toward the age baseline by sample size.
-  const personalWeight = sampleCount / (sampleCount + tuning.priorStrength);
-  const blended = personalWeight * personalMean + (1 - personalWeight) * baseline;
-
-  // Count naps already taken today (local day) to place us in the day.
   const todayKey = localDayKey(now, timeZone);
   const napsToday = sleeps.filter(
     (s) => s.type === 'NAP' && s.end != null && localDayKey(s.start, timeZone) === todayKey,
   ).length;
-  const expectedNaps = expectedNapsPerDay(ageMonths);
 
-  // Nap vs bedtime: once the day's naps are used up, the next sleep is bedtime.
-  const isBedtime = napsToday >= expectedNaps;
-  const kind: 'nap' | 'bedtime' = isBedtime ? 'bedtime' : 'nap';
-
-  // Wake windows grow across the day; the pre-bedtime one is the longest.
-  let positionFactor: number;
-  if (isBedtime) {
-    positionFactor = 1.25;
-  } else {
-    const denom = Math.max(1, expectedNaps - 1);
-    positionFactor = 0.9 + 0.25 * clamp(napsToday / denom, 0, 1); // 0.90 -> 1.15
-  }
-
-  const predictedWakeWindow = clamp(blended * positionFactor, 20, capMinutes);
-
-  const center = lastWakeAt + predictedWakeWindow * MINUTE_MS;
-  const halfWidthMin = clamp(
-    personalStd > 0 ? personalStd : tuning.defaultHalfWidthMin,
-    tuning.minHalfWidthMin,
-    tuning.maxHalfWidthMin,
-  );
-  const windowStart = center - halfWidthMin * MINUTE_MS;
-  const windowEnd = center + halfWidthMin * MINUTE_MS;
+  const window = buildWindow(lastWakeAt, napsToday, ctx);
 
   const status: 'upcoming' | 'now' | 'overdue' =
-    now < windowStart ? 'upcoming' : now <= windowEnd ? 'now' : 'overdue';
-  const minutesUntilStart = Math.round((windowStart - now) / MINUTE_MS);
+    now < window.windowStart ? 'upcoming' : now <= window.windowEnd ? 'now' : 'overdue';
+  const minutesUntilStart = Math.round((window.windowStart - now) / MINUTE_MS);
 
-  // Confidence from sample size and consistency (coefficient of variation).
-  const cv = personalMean > 0 ? personalStd / personalMean : 1;
+  const cv = ctx.personalMean > 0 ? ctx.personalStd / ctx.personalMean : 1;
   let confidence: SleepPredictionConfidence = 'low';
-  if (sampleCount >= 8 && cv < 0.35) confidence = 'high';
-  else if (sampleCount >= 4) confidence = 'medium';
+  if (ctx.sampleCount >= 8 && cv < 0.35) confidence = 'high';
+  else if (ctx.sampleCount >= 4) confidence = 'medium';
 
   const source: SleepPredictionResult['basis']['source'] =
-    sampleCount === 0 ? 'age-based' : personalWeight >= 0.7 ? 'personalized' : 'blended';
+    ctx.sampleCount === 0 ? 'age-based' : ctx.personalWeight >= 0.7 ? 'personalized' : 'blended';
 
   return {
     state: 'prediction',
-    kind,
-    windowStart,
-    windowEnd,
-    center,
+    kind: window.kind,
+    windowStart: window.windowStart,
+    windowEnd: window.windowEnd,
+    center: window.center,
     status,
     minutesUntilStart,
     confidence,
     lastWakeAt,
     basis: {
-      sampleCount,
-      predictedWakeWindowMinutes: Math.round(predictedWakeWindow),
-      baselineWakeWindowMinutes: baseline,
+      sampleCount: ctx.sampleCount,
+      predictedWakeWindowMinutes: window.predictedWakeWindowMinutes,
+      baselineWakeWindowMinutes: ctx.baseline,
       source,
     },
   };
+}
+
+/**
+ * Predict the next sleep plus the projected remaining-day schedule (all
+ * upcoming naps and bedtime for the current local day). Each subsequent sleep
+ * is projected by advancing past the previous nap using an estimated nap length.
+ * Projection stops at bedtime or when it would cross into the next local day.
+ */
+export function predictDaySchedule(input: PredictNextSleepInput): DaySchedule {
+  const tuning: PredictionTuning = { ...DEFAULT_TUNING, ...input.options };
+  const next = predictNextSleep(input);
+
+  if (next.state !== 'prediction') return { next, schedule: [] };
+
+  const ctx = buildContext(input, tuning);
+  const napDurationMin = estimateNapDurationMinutes(
+    input.sleeps,
+    input.now,
+    input.ageMonths,
+    tuning.historyDays,
+  );
+  const todayKey = localDayKey(input.now, input.timeZone);
+
+  const schedule: PredictedSleep[] = [
+    { kind: next.kind, windowStart: next.windowStart, windowEnd: next.windowEnd, center: next.center },
+  ];
+
+  // Recompute naps-so-far to advance the simulation from the same starting point.
+  let napsBefore = input.sleeps.filter(
+    (s) => s.type === 'NAP' && s.end != null && localDayKey(s.start, input.timeZone) === todayKey,
+  ).length;
+  let cursor: PredictedSleep = schedule[0];
+
+  while (cursor.kind === 'nap' && schedule.length < tuning.maxScheduleSleeps) {
+    // The current nap runs its estimated length, then the baby is awake again.
+    const wakeAt = cursor.center + napDurationMin * MINUTE_MS;
+    napsBefore += 1;
+    const w = buildWindow(wakeAt, napsBefore, ctx);
+    if (localDayKey(w.center, input.timeZone) !== todayKey) break;
+    const entry: PredictedSleep = {
+      kind: w.kind,
+      windowStart: w.windowStart,
+      windowEnd: w.windowEnd,
+      center: w.center,
+    };
+    schedule.push(entry);
+    cursor = entry;
+  }
+
+  return { next, schedule };
 }

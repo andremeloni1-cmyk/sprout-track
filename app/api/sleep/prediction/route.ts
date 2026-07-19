@@ -5,8 +5,8 @@ import { withAuthContext, AuthResult } from '../../utils/auth';
 import { getSystemTimezone } from '../../utils/timezone';
 import {
   ageInMonths,
-  predictNextSleep,
-  type SleepPrediction,
+  predictDaySchedule,
+  type DaySchedule,
   type SleepSample,
 } from '@/src/utils/sleepPrediction';
 
@@ -16,9 +16,10 @@ const HISTORY_DAYS = 16;
 /**
  * GET /api/sleep/prediction?babyId=...
  *
- * Returns a "SweetSpot"-style prediction of the baby's next sleep window,
- * scoped to the authenticated user's family. The heavy logic lives in the pure,
- * unit-tested src/utils/sleepPrediction module; this handler only loads data.
+ * Returns a "SweetSpot"-style prediction of the baby's next sleep window plus
+ * the projected remaining-day schedule (`{ next, schedule }`), scoped to the
+ * authenticated user's family. The heavy logic lives in the pure, unit-tested
+ * src/utils/sleepPrediction module; this handler only loads data.
  */
 async function handleGet(req: NextRequest, authContext: AuthResult) {
   try {
@@ -70,14 +71,14 @@ async function handleGet(req: NextRequest, authContext: AuthResult) {
       type: log.type,
     }));
 
-    const prediction = predictNextSleep({
+    const prediction = predictDaySchedule({
       sleeps,
       now,
       ageMonths: ageInMonths(baby.birthDate.getTime(), now),
       timeZone: getSystemTimezone(),
     });
 
-    return NextResponse.json<ApiResponse<SleepPrediction>>({ success: true, data: prediction });
+    return NextResponse.json<ApiResponse<DaySchedule>>({ success: true, data: prediction });
   } catch (error) {
     console.error('Error predicting next sleep:', error);
     return NextResponse.json<ApiResponse<null>>(
