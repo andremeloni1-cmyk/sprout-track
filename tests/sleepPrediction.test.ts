@@ -7,9 +7,11 @@ import {
   estimateNapDurationMinutes,
   expectedNapsPerDay,
   localDayKey,
+  NORMATIVE_SLEEP,
   predictDaySchedule,
   predictNextSleep,
   sleepWindowNotifyDecision,
+  totalSleepTargetMinutes,
   type SleepSample,
 } from '@/src/utils/sleepPrediction';
 
@@ -36,9 +38,9 @@ describe('ageInMonths', () => {
 describe('ageBaselineWakeWindowMinutes', () => {
   it('increases with age across brackets', () => {
     expect(ageBaselineWakeWindowMinutes(0.5)).toBe(50);
-    expect(ageBaselineWakeWindowMinutes(2.5)).toBe(80);
-    expect(ageBaselineWakeWindowMinutes(8)).toBe(165);
-    expect(ageBaselineWakeWindowMinutes(13)).toBe(205);
+    expect(ageBaselineWakeWindowMinutes(2.5)).toBe(85);
+    expect(ageBaselineWakeWindowMinutes(8)).toBe(175);
+    expect(ageBaselineWakeWindowMinutes(13)).toBe(210);
     expect(ageBaselineWakeWindowMinutes(24)).toBe(300);
     expect(ageBaselineWakeWindowMinutes(40)).toBe(345);
   });
@@ -55,10 +57,34 @@ describe('ageBaselineWakeWindowMinutes', () => {
 
 describe('expectedNapsPerDay', () => {
   it('falls from many naps as a newborn to one for toddlers', () => {
-    expect(expectedNapsPerDay(2)).toBe(5);
+    expect(expectedNapsPerDay(2)).toBe(4);
     expect(expectedNapsPerDay(5)).toBe(3);
     expect(expectedNapsPerDay(12)).toBe(2);
     expect(expectedNapsPerDay(24)).toBe(1);
+  });
+});
+
+describe('normative sleep table', () => {
+  it('naps and total sleep are non-increasing with age', () => {
+    let prevNaps = Infinity;
+    let prevTotal = Infinity;
+    for (const band of NORMATIVE_SLEEP) {
+      expect(band.naps).toBeLessThanOrEqual(prevNaps);
+      expect(band.totalSleepMin).toBeLessThanOrEqual(prevTotal);
+      expect(band.daytimeSleepMin).toBeLessThan(band.totalSleepMin);
+      prevNaps = band.naps;
+      prevTotal = band.totalSleepMin;
+    }
+  });
+
+  it('total-sleep target sits within the AASM consensus ranges', () => {
+    // AASM: infants 4–12mo 12–16h (720–960 min); children 1–2y 11–14h (660–840 min).
+    expect(totalSleepTargetMinutes(8)).toBeGreaterThanOrEqual(720);
+    expect(totalSleepTargetMinutes(8)).toBeLessThanOrEqual(960);
+    expect(totalSleepTargetMinutes(18)).toBeGreaterThanOrEqual(660);
+    expect(totalSleepTargetMinutes(18)).toBeLessThanOrEqual(840);
+    // Target decreases from infancy to toddlerhood.
+    expect(totalSleepTargetMinutes(2)).toBeGreaterThan(totalSleepTargetMinutes(30));
   });
 });
 
@@ -139,9 +165,9 @@ describe('predictNextSleep', () => {
     expect(result.kind).toBe('nap');
     expect(result.basis.sampleCount).toBe(0);
     expect(result.basis.source).toBe('age-based');
-    expect(result.basis.baselineWakeWindowMinutes).toBe(165);
-    // First wake window of the day: baseline * 0.9 = 148.5 -> center at lastWake+148.5m
-    expect(result.basis.predictedWakeWindowMinutes).toBe(149);
+    expect(result.basis.baselineWakeWindowMinutes).toBe(175);
+    // First wake window of the day: baseline(175) * 0.9 = 157.5 -> 158 (rounded)
+    expect(result.basis.predictedWakeWindowMinutes).toBe(158);
     expect(result.confidence).toBe('low');
     expect(result.status).toBe('upcoming');
     expect(result.lastWakeAt).toBe(lastWake);
@@ -165,9 +191,9 @@ describe('predictNextSleep', () => {
     expect(result.basis.sampleCount).toBe(15);
     expect(result.basis.source).toBe('personalized');
     expect(result.confidence).toBe('high');
-    // Prediction pulled toward the personal 120-min window (baseline is 165).
+    // Prediction pulled below the age baseline toward the personal 120-min window.
     expect(result.basis.predictedWakeWindowMinutes).toBeGreaterThan(100);
-    expect(result.basis.predictedWakeWindowMinutes).toBeLessThan(165);
+    expect(result.basis.predictedWakeWindowMinutes).toBeLessThan(ageBaselineWakeWindowMinutes(8));
     expect(result.windowStart).toBeLessThan(result.windowEnd);
   });
 
@@ -189,8 +215,8 @@ describe('predictNextSleep', () => {
 
   it('reports a "now" status when inside the sweet spot', () => {
     const now = Date.UTC(2026, 0, 15, 12, 0, 0);
-    // baseline 165 * 0.9 (first window) = 148.5m before now => center == now.
-    const lastWake = now - 148.5 * MIN;
+    // baseline 175 * 0.9 (first window) = 157.5m before now => center == now.
+    const lastWake = now - 157.5 * MIN;
     const result = predictNextSleep({
       sleeps: [{ start: lastWake - HOUR, end: lastWake, type: 'NIGHT_SLEEP' }],
       now,
