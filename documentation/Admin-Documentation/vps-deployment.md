@@ -264,41 +264,62 @@ When you later add a domain: point DNS at the VPS, set `DOMAIN` and `APP_URL` in
 
 ## Using an existing reverse proxy
 
-If you already run nginx, Traefik, or a Cloudflare Tunnel and want it to front
-Sprout Track instead of Caddy:
+If the VPS already runs its own reverse proxy (a host **nginx**, Traefik, a
+Cloudflare Tunnel, or a control panel) terminating TLS for other sites, do **not**
+use the Caddy stack — it would fight for ports 80/443. Instead use
+[`docker-compose.nginx.yml`](../../docker-compose.nginx.yml), which runs only the
+app on a loopback port and lets your existing proxy front it.
 
-1. Publish the app on the loopback interface only. In
-   `docker-compose.production.yml`, uncomment the `ports` block under the `app`
-   service:
-
-   ```yaml
-       ports:
-         - "127.0.0.1:3000:3000"
-   ```
-
-2. Start just the app (not Caddy):
+1. Pick a **free** loopback port. The default is `3010`; if that is taken, set
+   `APP_LOCAL_PORT` in `.env`. Check what is already in use with:
 
    ```bash
-   docker compose -f docker-compose.production.yml up -d app
+   sudo ss -tlnp | grep -E ':30[0-9][0-9]'
    ```
 
-3. Point your proxy at `http://127.0.0.1:3000`. Example nginx server block:
+2. Start just the app (no Caddy, ports 80/443 untouched):
+
+   ```bash
+   docker compose -f docker-compose.nginx.yml up -d
+   ```
+
+3. Add a virtual host to your existing proxy pointing at
+   `http://127.0.0.1:3010` (or your `APP_LOCAL_PORT`). Example nginx site
+   (`/etc/nginx/sites-available/sprout-track`, then symlink into
+   `sites-enabled/`):
 
    ```nginx
    server {
+       listen 80;
+       listen [::]:80;
        server_name baby.example.com;
+
+       client_max_body_size 25m;   # allow vaccine-document uploads
+
        location / {
-           proxy_pass http://127.0.0.1:3000;
+           proxy_pass http://127.0.0.1:3010;
+           proxy_http_version 1.1;
            proxy_set_header Host $host;
+           proxy_set_header X-Real-IP $remote_addr;
            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
            proxy_set_header X-Forwarded-Proto $scheme;
+           proxy_set_header Upgrade $http_upgrade;
+           proxy_set_header Connection "upgrade";
        }
    }
    ```
 
-   Then obtain a certificate with your usual tooling (e.g. `certbot --nginx`).
+4. Enable it and obtain a certificate with your usual tooling:
 
-Complete Steps 8–10 as normal (they are proxy-independent).
+   ```bash
+   sudo nginx -t && sudo systemctl reload nginx
+   sudo certbot --nginx -d baby.example.com
+   ```
+
+   `certbot --nginx` adds the `listen 443 ssl` block, installs the certificate,
+   and redirects HTTP → HTTPS automatically.
+
+Complete Steps 7–10 as normal (they are proxy-independent).
 
 ---
 

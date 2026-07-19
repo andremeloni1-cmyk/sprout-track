@@ -166,6 +166,10 @@ cp .env.production.sample .env      # set DOMAIN, TZ, APP_URL
 docker compose -f docker-compose.production.yml up -d
 ```
 
+Already run nginx/Traefik/a Cloudflare Tunnel on the server? Use
+`docker-compose.nginx.yml` instead to run the app on a loopback port behind your
+existing proxy.
+
 Full walkthrough (DNS, firewall, PostgreSQL, existing reverse proxies, backups):
 see [VPS Deployment](documentation/Admin-Documentation/vps-deployment.md).
 

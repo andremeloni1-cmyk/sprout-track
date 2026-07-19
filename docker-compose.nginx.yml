@@ -1,0 +1,74 @@
+# Sprout Track — behind an existing reverse proxy (e.g. a host nginx)
+#
+# Use this INSTEAD of docker-compose.production.yml when the VPS already runs
+# its own reverse proxy (nginx / Traefik / Caddy) terminating TLS for other
+# sites. It runs ONLY the app, published on the loopback interface, so your
+# existing proxy can forward a virtual host to it. No bundled Caddy is started,
+# so ports 80/443 are left untouched.
+#
+#   cp .env.production.sample .env      # DOMAIN is ignored here; set APP_URL/TZ
+#   docker compose -f docker-compose.nginx.yml up -d
+#
+# Then point your proxy at:  http://127.0.0.1:${APP_LOCAL_PORT:-3010}
+# (default 3010 — set APP_LOCAL_PORT in .env if that port is already in use).
+#
+# SQLite by default. For the optional bundled PostgreSQL, configure the
+# DATABASE_* values in .env and add --profile postgres (see the sample file).
+
+services:
+  app:
+    image: sprouttrack/sprout-track:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        ENABLE_NOTIFICATIONS: ${ENABLE_NOTIFICATIONS:-true}
+    container_name: sprout-track
+    restart: unless-stopped
+    # Published on loopback only — reachable by the host's reverse proxy, not
+    # from the public internet directly.
+    ports:
+      - "127.0.0.1:${APP_LOCAL_PORT:-3010}:3000"
+    volumes:
+      - ./data/db:/db           # SQLite database files (unused with PostgreSQL)
+      - ./data/env:/app/env     # Persisted .env (secrets, COOKIE_SECURE, TZ, ...)
+      - ./data/files:/app/Files # Encrypted file storage (vaccine documents)
+    environment:
+      - NODE_ENV=production
+      - DATABASE_PROVIDER=${DATABASE_PROVIDER:-sqlite}
+      - DATABASE_URL=${DATABASE_URL:-}
+      - LOG_DATABASE_URL=${LOG_DATABASE_URL:-}
+      - APP_URL=${APP_URL:-}
+      - ROOT_DOMAIN=${ROOT_DOMAIN:-}
+      - ENABLE_NOTIFICATIONS=${ENABLE_NOTIFICATIONS:-true}
+      - NOTIFICATION_CRON_SECRET=${NOTIFICATION_CRON_SECRET:-}
+      - VAPID_PUBLIC_KEY=${VAPID_PUBLIC_KEY:-}
+      - VAPID_PRIVATE_KEY=${VAPID_PRIVATE_KEY:-}
+      - VAPID_SUBJECT=${VAPID_SUBJECT:-mailto:notifications@sprouttrack.app}
+      - TZ=${TZ:-UTC}
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # --- Optional bundled PostgreSQL (inactive unless --profile postgres) -----
+  db:
+    image: postgres:16-alpine
+    container_name: sprout-track-db
+    profiles: ["postgres"]
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=sprout
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-}
+      - POSTGRES_DB=sprout_track
+      - POSTGRES_LOG_DB=sprout_track_logs
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+      - ./scripts/init-pg-databases.sh:/docker-entrypoint-initdb.d/init-pg-databases.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sprout -d sprout_track"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
