@@ -7,6 +7,7 @@ import {
   estimateNapDurationMinutes,
   expectedNapsPerDay,
   localDayKey,
+  napDebtFactor,
   NORMATIVE_SLEEP,
   predictDaySchedule,
   predictNextSleep,
@@ -310,6 +311,52 @@ describe('predictDaySchedule', () => {
     });
     expect(schedule.length).toBe(3);
     expect(schedule.every((s) => s.kind === 'nap')).toBe(true);
+  });
+});
+
+describe('napDebtFactor', () => {
+  it('is neutral with no naps yet today', () => {
+    expect(napDebtFactor([], 90)).toBe(1);
+  });
+
+  it('is neutral when today\'s naps match the typical length', () => {
+    expect(napDebtFactor([90, 90], 90)).toBe(1);
+  });
+
+  it('shortens the window after short naps (bounded at 0.85)', () => {
+    expect(napDebtFactor([30], 90)).toBe(0.85); // ratio 0.33 -> clamped
+    expect(napDebtFactor([72], 90)).toBeCloseTo(0.94, 5); // ratio 0.8 -> 1 + 0.3*(-0.2)
+  });
+
+  it('lengthens the window after long naps (bounded at 1.1)', () => {
+    expect(napDebtFactor([150], 90)).toBe(1.1); // ratio 1.67 -> clamped
+  });
+});
+
+describe('sleep-debt effect on prediction', () => {
+  const base = Date.UTC(2026, 0, 15, 13, 0, 0);
+  // 8-month-old, one completed nap earlier today (start 10:00), awake since.
+  function withNapMinutes(napMin: number) {
+    const napStart = Date.UTC(2026, 0, 15, 10, 0, 0);
+    return predictNextSleep({
+      sleeps: [{ start: napStart, end: napStart + napMin * 60_000, type: 'NAP' }],
+      now: base,
+      ageMonths: 8,
+      timeZone: 'UTC',
+    });
+  }
+
+  it('predicts an earlier next window after a short nap than after a long nap', () => {
+    const shortNap = withNapMinutes(30);
+    const longNap = withNapMinutes(120);
+    expect(shortNap.state).toBe('prediction');
+    expect(longNap.state).toBe('prediction');
+    if (shortNap.state !== 'prediction' || longNap.state !== 'prediction') return;
+    expect(shortNap.basis.napAdjustmentFactor).toBeLessThan(1);
+    expect(longNap.basis.napAdjustmentFactor).toBeGreaterThan(1);
+    expect(shortNap.basis.predictedWakeWindowMinutes).toBeLessThan(
+      longNap.basis.predictedWakeWindowMinutes,
+    );
   });
 });
 
