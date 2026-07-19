@@ -34,6 +34,9 @@ import { SleepPredictionCard } from '@/src/components/SleepPrediction';
   (`state: 'insufficient'`).
 - Otherwise shows the window (e.g. `2:00 – 2:30 PM`), a nap/bedtime label, and a
   countdown that turns into a "Now" / "Overdue" state as time passes.
+- When the sleep-debt adjustment moved the window meaningfully
+  (`basis.napAdjustmentFactor` ≤ 0.95 or ≥ 1.05), shows a short reason line —
+  "Nudged earlier after short naps" / "Nudged later after long naps".
 
 ## Prediction model
 

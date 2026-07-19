@@ -25,6 +25,7 @@ export const sleepPredictionStyles = {
   body: 'flex min-w-0 flex-1 flex-col',
   label: 'text-[11px] font-medium uppercase tracking-wide opacity-70',
   window: 'text-sm font-semibold leading-tight',
+  adjustment: 'mt-0.5 text-[11px] font-medium opacity-70',
   countdown: 'ml-auto shrink-0 pl-2 text-right',
   countdownValue: 'text-sm font-semibold leading-tight',
   meta: 'text-xs opacity-80',
