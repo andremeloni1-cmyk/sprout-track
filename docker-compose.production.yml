@@ -1,0 +1,114 @@
+# Sprout Track — Production VPS deployment (app + Caddy reverse proxy)
+#
+# What this stack gives you:
+#   • The Sprout Track app (SQLite by default — no external database required)
+#   • A Caddy reverse proxy that terminates TLS and, when DOMAIN is set,
+#     automatically obtains and renews Let's Encrypt HTTPS certificates
+#   • All persistent state under ./data so backups are a simple `tar ./data`
+#
+# Quick start:
+#   cp .env.production.sample .env      # then edit DOMAIN, TZ, APP_URL
+#   docker compose -f docker-compose.production.yml up -d
+#
+# Build from source instead of pulling the published image:
+#   docker compose -f docker-compose.production.yml up -d --build
+#
+# PostgreSQL instead of SQLite (optional — see .env.production.sample):
+#   Set DATABASE_PROVIDER, DATABASE_URL, LOG_DATABASE_URL and POSTGRES_PASSWORD
+#   in .env, then start with the postgres profile so the bundled DB runs too:
+#   docker compose -f docker-compose.production.yml --profile postgres up -d
+#
+# See documentation/Admin-Documentation/vps-deployment.md for the full guide.
+
+services:
+  app:
+    image: sprouttrack/sprout-track:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        ENABLE_NOTIFICATIONS: ${ENABLE_NOTIFICATIONS:-true}
+    container_name: sprout-track
+    restart: unless-stopped
+    # No host port is published: Caddy is the only public entry point and
+    # reaches the app over the internal Compose network at http://app:3000.
+    # To reach the app directly on the VPS for debugging, uncomment:
+    # ports:
+    #   - "127.0.0.1:3000:3000"
+    volumes:
+      - ./data/db:/db           # SQLite database files (unused with PostgreSQL)
+      - ./data/env:/app/env     # Persisted .env (secrets, COOKIE_SECURE, TZ, ...)
+      - ./data/files:/app/Files # Encrypted file storage (vaccine documents)
+    environment:
+      - NODE_ENV=production
+      # --- Database (SQLite by default) ------------------------------------
+      # These three are the only settings the container lets the runtime
+      # environment override after first boot, so switching to PostgreSQL is
+      # just a matter of setting them in .env and adding --profile postgres.
+      # Leave DATABASE_URL / LOG_DATABASE_URL empty for SQLite.
+      - DATABASE_PROVIDER=${DATABASE_PROVIDER:-sqlite}
+      - DATABASE_URL=${DATABASE_URL:-}
+      - LOG_DATABASE_URL=${LOG_DATABASE_URL:-}
+      # --- Notifications / public URL (read by the notification cron job) ---
+      - APP_URL=${APP_URL:-}
+      - ROOT_DOMAIN=${ROOT_DOMAIN:-}
+      - ENABLE_NOTIFICATIONS=${ENABLE_NOTIFICATIONS:-true}
+      - NOTIFICATION_CRON_SECRET=${NOTIFICATION_CRON_SECRET:-}
+      - VAPID_PUBLIC_KEY=${VAPID_PUBLIC_KEY:-}
+      - VAPID_PRIVATE_KEY=${VAPID_PRIVATE_KEY:-}
+      - VAPID_SUBJECT=${VAPID_SUBJECT:-mailto:notifications@sprouttrack.app}
+      # TZ is applied to the container clock on first boot and then persisted in
+      # ./data/env/.env. COOKIE_SECURE also lives there (default "false"). To
+      # change either after first boot, edit ./data/env/.env and restart the
+      # app — see the VPS deployment guide.
+      - TZ=${TZ:-UTC}
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: sprout-track-caddy
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3 (QUIC)
+    environment:
+      # DOMAIN empty -> serve plain HTTP on :80 (reach the app by IP address).
+      # DOMAIN set   -> Caddy gets & auto-renews a Let's Encrypt cert for it.
+      - SITE_ADDRESS=${DOMAIN:-:80}
+      - APP_UPSTREAM=app:3000
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./data/caddy/data:/data     # ACME account + issued certificates (keep!)
+      - ./data/caddy/config:/config
+
+  # --- Optional bundled PostgreSQL -----------------------------------------
+  # Inactive unless you start the stack with: --profile postgres
+  # Configure the matching DATABASE_* values in .env (see the sample file).
+  db:
+    image: postgres:16-alpine
+    container_name: sprout-track-db
+    profiles: ["postgres"]
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=sprout
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-}
+      - POSTGRES_DB=sprout_track
+      - POSTGRES_LOG_DB=sprout_track_logs
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+      # Creates the second (logs) database on first initialization:
+      - ./scripts/init-pg-databases.sh:/docker-entrypoint-initdb.d/init-pg-databases.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sprout -d sprout_track"]
+      interval: 10s
+      timeout: 5s
+      retries: 5

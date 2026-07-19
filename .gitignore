@@ -53,6 +53,9 @@ sitemap.xml
 /logs
 /Logs
 
+# production docker-compose bind-mount data (db, env, files, caddy certs, postgres)
+/data
+
 # Datagrip
 .idea
 

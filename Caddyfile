@@ -1,0 +1,17 @@
+# Caddy reverse proxy for Sprout Track (used by docker-compose.production.yml).
+#
+# SITE_ADDRESS and APP_UPSTREAM are provided by the compose file:
+#   • SITE_ADDRESS = your DOMAIN  -> Caddy automatically provisions and renews
+#     a free Let's Encrypt TLS certificate and serves HTTPS (HTTP is redirected).
+#   • SITE_ADDRESS = ":80"        -> plain HTTP on port 80 (reach the app by IP,
+#     used when no DOMAIN is set). No certificate is issued in this mode.
+#
+# Optional: to receive certificate-expiry notices, uncomment and set an email.
+# {
+# 	email you@example.com
+# }
+
+{$SITE_ADDRESS} {
+	encode zstd gzip
+	reverse_proxy {$APP_UPSTREAM}
+}
