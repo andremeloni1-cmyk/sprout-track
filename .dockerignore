@@ -43,7 +43,14 @@ db/*.db
 # Docker
 Dockerfile
 docker-compose.yml
+docker-compose.postgres.yml
+docker-compose.production.yml
+docker-compose.nginx.yml
+Caddyfile
 .dockerignore
+
+# Production bind-mount data directory
+data/
 
 # Scripts
 scripts/backup.sh

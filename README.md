@@ -152,6 +152,27 @@ The Setup Wizard will guide you through initial configuration on first access.
 
 See [Docker Deployment](documentation/Admin-Documentation/docker-deployment.md) for docker-compose setup, volumes, custom ports, and container details.
 
+## Deploy on a VPS (public HTTPS)
+
+To run Sprout Track on a server and reach it over the internet with automatic
+HTTPS, use the production compose stack, which adds a [Caddy](https://caddyserver.com/)
+reverse proxy that provisions and renews Let's Encrypt certificates for your
+domain:
+
+```bash
+git clone https://github.com/Oak-and-Sprout/sprout-track.git
+cd sprout-track
+cp .env.production.sample .env      # set DOMAIN, TZ, APP_URL
+docker compose -f docker-compose.production.yml up -d
+```
+
+Already run nginx/Traefik/a Cloudflare Tunnel on the server? Use
+`docker-compose.nginx.yml` instead to run the app on a loopback port behind your
+existing proxy.
+
+Full walkthrough (DNS, firewall, PostgreSQL, existing reverse proxies, backups):
+see [VPS Deployment](documentation/Admin-Documentation/vps-deployment.md).
+
 ## Quick Start: Local (SQLite)
 
 Requires Node.js 22+, npm 10+, Git, and Bash.
@@ -184,6 +205,7 @@ See [Initial Setup](documentation/Admin-Documentation/initial-setup.md) for deta
 
 | Guide | Description |
 |-------|-------------|
+| [VPS Deployment](documentation/Admin-Documentation/vps-deployment.md) | Public internet deployment with a Caddy reverse proxy and automatic HTTPS |
 | [Docker Deployment](documentation/Admin-Documentation/docker-deployment.md) | Volumes, ports, container startup, building locally |
 | [Local Deployment](documentation/Admin-Documentation/local-deployment.md) | Manual setup, scripts reference, systemd service |
 | [Initial Setup](documentation/Admin-Documentation/initial-setup.md) | Setup Wizard, default credentials, Family Manager |
