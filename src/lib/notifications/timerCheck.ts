@@ -6,6 +6,17 @@ import {
 } from './push';
 import { t, formatTimeElapsed, DEFAULT_LANGUAGE } from './i18n';
 import { isNotificationsEnabled } from './config';
+import { getSystemTimezone } from '../../../app/api/utils/timezone';
+import {
+  ageInMonths,
+  predictNextSleep,
+  sleepWindowNotifyDecision,
+} from '@/src/utils/sleepPrediction';
+
+/** How many minutes before a predicted sleep window opens to send a heads-up. */
+const SLEEP_WINDOW_LEAD_MINUTES = 15;
+/** Days of sleep history used to personalize the prediction. */
+const SLEEP_HISTORY_DAYS = 16;
 
 /**
  * Parse warning time string (format: "HH:mm") to total minutes
@@ -664,6 +675,169 @@ export async function checkTimerExpirations(): Promise<number> {
   } catch (error) {
     console.error('[TimerCheck] Error in checkTimerExpirations:', error);
     // Don't throw - this should never block cron execution
+    return 0;
+  }
+}
+
+/** Format an instant as a short local clock time in the given timezone/locale. */
+function formatLocalClock(ms: number, timeZone: string, lang: string): string {
+  try {
+    return new Intl.DateTimeFormat(lang || 'en', {
+      timeZone,
+      hour: 'numeric',
+      minute: '2-digit',
+    }).format(new Date(ms));
+  } catch {
+    return new Intl.DateTimeFormat('en', {
+      timeZone,
+      hour: 'numeric',
+      minute: '2-digit',
+    }).format(new Date(ms));
+  }
+}
+
+/**
+ * Check predicted sleep windows and send "opening soon" heads-up notifications.
+ *
+ * For each baby with an enabled SLEEP_WINDOW_SOON preference, predicts the next
+ * sleep and, if its window opens within SLEEP_WINDOW_LEAD_MINUTES, sends a push.
+ * Fires once per window: deduped via NotificationPreference.lastTimerNotifiedAt,
+ * which stores the notified window's start time (a new window differs by more
+ * than the decision tolerance).
+ * @returns Number of notifications sent
+ */
+export async function checkSleepWindowNotifications(): Promise<number> {
+  if (!(await isNotificationsEnabled())) {
+    console.log('[TimerCheck] Notifications disabled, skipping sleep window check');
+    return 0;
+  }
+
+  try {
+    const preferences = await prisma.notificationPreference.findMany({
+      where: { eventType: NotificationEventType.SLEEP_WINDOW_SOON, enabled: true },
+      include: {
+        subscription: {
+          select: {
+            id: true,
+            endpoint: true,
+            p256dh: true,
+            auth: true,
+            accountId: true,
+            caretakerId: true,
+          },
+        },
+        baby: { select: { id: true, firstName: true, lastName: true, birthDate: true } },
+      },
+    });
+
+    if (preferences.length === 0) return 0;
+
+    // Group preferences by baby so the prediction is computed once per baby.
+    const byBaby = new Map<string, typeof preferences>();
+    for (const pref of preferences) {
+      if (!pref.baby || !pref.subscription) continue;
+      const list = byBaby.get(pref.baby.id);
+      if (list) list.push(pref);
+      else byBaby.set(pref.baby.id, [pref]);
+    }
+
+    const timeZone = getSystemTimezone();
+    const now = Date.now();
+    let notificationsSent = 0;
+
+    for (const [babyId, babyPrefs] of Array.from(byBaby.entries())) {
+      const baby = babyPrefs[0].baby!;
+      const since = new Date(now - SLEEP_HISTORY_DAYS * 24 * 60 * 60 * 1000);
+      const logs = await prisma.sleepLog.findMany({
+        where: { babyId, deletedAt: null, startTime: { gte: since } },
+        select: { startTime: true, endTime: true, type: true },
+        orderBy: { startTime: 'asc' },
+      });
+
+      const prediction = predictNextSleep({
+        sleeps: logs.map((l) => ({
+          start: l.startTime.getTime(),
+          end: l.endTime ? l.endTime.getTime() : null,
+          type: l.type,
+        })),
+        now,
+        ageMonths: ageInMonths(baby.birthDate.getTime(), now),
+        timeZone,
+      });
+
+      if (prediction.state !== 'prediction') continue;
+      const { windowStart, kind } = prediction;
+
+      for (const pref of babyPrefs) {
+        if (!pref.subscription) continue;
+
+        const shouldNotify = sleepWindowNotifyDecision({
+          windowStartMs: windowStart,
+          nowMs: now,
+          leadMinutes: SLEEP_WINDOW_LEAD_MINUTES,
+          lastNotifiedWindowStartMs: pref.lastTimerNotifiedAt
+            ? pref.lastTimerNotifiedAt.getTime()
+            : null,
+        });
+        if (!shouldNotify) continue;
+
+        // Record the notified window BEFORE sending (race-condition fix).
+        const previousNotifiedAt = pref.lastTimerNotifiedAt;
+        await prisma.notificationPreference.update({
+          where: { id: pref.id },
+          data: { lastTimerNotifiedAt: new Date(windowStart) },
+        });
+
+        try {
+          const userLanguage = await getUserLanguage(
+            pref.subscription.accountId,
+            pref.subscription.caretakerId,
+          );
+          const windowTime = formatLocalClock(windowStart, timeZone, userLanguage);
+          const titleKey =
+            kind === 'bedtime'
+              ? 'notification.sleepwindow.bedtime.title'
+              : 'notification.sleepwindow.nap.title';
+
+          const payload: NotificationPayload = {
+            title: t(titleKey, userLanguage, { babyName: baby.firstName }),
+            body: t('notification.sleepwindow.body', userLanguage, { windowTime }),
+            icon: '/sprout-128.png',
+            badge: '/sprout-128.png',
+            tag: `sleepwindow-${baby.id}`,
+            data: { eventType: NotificationEventType.SLEEP_WINDOW_SOON, babyId: baby.id },
+          };
+
+          await sendNotificationWithLogging(
+            pref.subscription.id,
+            {
+              endpoint: pref.subscription.endpoint,
+              p256dh: pref.subscription.p256dh,
+              auth: pref.subscription.auth,
+            },
+            payload,
+            NotificationEventType.SLEEP_WINDOW_SOON,
+            null,
+            baby.id,
+          );
+          notificationsSent++;
+        } catch (sendError) {
+          // Roll back the dedup marker so a transient failure can retry.
+          await prisma.notificationPreference.update({
+            where: { id: pref.id },
+            data: { lastTimerNotifiedAt: previousNotifiedAt },
+          });
+          console.error(
+            `[TimerCheck] Error sending sleep window notification for preference ${pref.id}:`,
+            sendError,
+          );
+        }
+      }
+    }
+
+    return notificationsSent;
+  } catch (error) {
+    console.error('[TimerCheck] Error in checkSleepWindowNotifications:', error);
     return 0;
   }
 }

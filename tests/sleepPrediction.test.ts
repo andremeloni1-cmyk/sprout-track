@@ -9,6 +9,7 @@ import {
   localDayKey,
   predictDaySchedule,
   predictNextSleep,
+  sleepWindowNotifyDecision,
   type SleepSample,
 } from '@/src/utils/sleepPrediction';
 
@@ -283,5 +284,66 @@ describe('predictDaySchedule', () => {
     });
     expect(schedule.length).toBe(3);
     expect(schedule.every((s) => s.kind === 'nap')).toBe(true);
+  });
+});
+
+describe('sleepWindowNotifyDecision', () => {
+  const now = Date.UTC(2026, 0, 15, 12, 0, 0);
+  const lead = 15;
+
+  it('fires when the window opens within the lead time and none sent yet', () => {
+    expect(
+      sleepWindowNotifyDecision({
+        windowStartMs: now + 10 * MIN,
+        nowMs: now,
+        leadMinutes: lead,
+        lastNotifiedWindowStartMs: null,
+      }),
+    ).toBe(true);
+  });
+
+  it('does not fire when the window is still further off than the lead time', () => {
+    expect(
+      sleepWindowNotifyDecision({
+        windowStartMs: now + 40 * MIN,
+        nowMs: now,
+        leadMinutes: lead,
+        lastNotifiedWindowStartMs: null,
+      }),
+    ).toBe(false);
+  });
+
+  it('does not fire once the window has already opened', () => {
+    expect(
+      sleepWindowNotifyDecision({
+        windowStartMs: now - 5 * MIN,
+        nowMs: now,
+        leadMinutes: lead,
+        lastNotifiedWindowStartMs: null,
+      }),
+    ).toBe(false);
+  });
+
+  it('does not re-fire for the same window already notified', () => {
+    const windowStart = now + 10 * MIN;
+    expect(
+      sleepWindowNotifyDecision({
+        windowStartMs: windowStart,
+        nowMs: now,
+        leadMinutes: lead,
+        lastNotifiedWindowStartMs: windowStart + 5 * MIN, // within default 45m tolerance
+      }),
+    ).toBe(false);
+  });
+
+  it('fires again for a genuinely new window', () => {
+    expect(
+      sleepWindowNotifyDecision({
+        windowStartMs: now + 10 * MIN,
+        nowMs: now,
+        leadMinutes: lead,
+        lastNotifiedWindowStartMs: now - 3 * HOUR, // an earlier, different window
+      }),
+    ).toBe(true);
   });
 });
