@@ -114,39 +114,92 @@ export function ageInMonths(birthDateMs: number, nowMs: number): number {
 }
 
 /**
- * Age-appropriate average wake window in minutes. Based on widely used
- * pediatric wake-window guidance; blended with the child's own data downstream.
+ * Population sleep norms by age, used to calibrate the cold-start priors below
+ * (before a baby has enough logged history to personalize from). Grounded in
+ * published normative data:
+ *   - AASM consensus recommendations for total sleep / 24h — infants 4–12mo
+ *     12–16h, children 1–2y 11–14h (aasm.org child sleep duration advisory).
+ *   - Iglowstein et al., Pediatrics 2003 — percentile curves for total/day/night
+ *     sleep; documents the 2→1 nap transition at ~15–18 months.
+ *   - Galland et al., Sleep Medicine Reviews 2012 — meta-analysis (0–12y, 34
+ *     studies) of total sleep, nap number, and daytime sleep by age.
+ *   - National Sleep Foundation — 0–3mo ~14–17h (the youngest band, which AASM
+ *     leaves unspecified due to wide variation).
+ * These are population midpoints with wide individual spread; the engine blends
+ * them toward each baby's own logged data (see buildContext).
  */
-export function ageBaselineWakeWindowMinutes(ageMonths: number): number {
-  if (ageMonths < 1) return 50;
-  if (ageMonths < 2) return 65;
-  if (ageMonths < 3) return 80;
-  if (ageMonths < 4) return 95;
-  if (ageMonths < 5) return 110;
-  if (ageMonths < 7) return 135;
-  if (ageMonths < 10) return 165;
-  if (ageMonths < 14) return 205;
-  if (ageMonths < 18) return 255;
-  if (ageMonths < 36) return 300;
-  return 345;
+export interface AgeSleepNorm {
+  /** Exclusive upper bound of the band, in months. */
+  maxMonths: number;
+  /** Typical naps per day. */
+  naps: number;
+  /** Typical total sleep per 24h, minutes. */
+  totalSleepMin: number;
+  /** Typical daytime (nap) sleep, minutes. */
+  daytimeSleepMin: number;
+}
+
+export const NORMATIVE_SLEEP: readonly AgeSleepNorm[] = [
+  { maxMonths: 3, naps: 4, totalSleepMin: 930, daytimeSleepMin: 390 }, // 0–3mo  ~15.5h / ~6.5h day
+  { maxMonths: 6, naps: 3, totalSleepMin: 870, daytimeSleepMin: 225 }, // 3–6mo  ~14.5h / ~3.75h
+  { maxMonths: 9, naps: 3, totalSleepMin: 840, daytimeSleepMin: 195 }, // 6–9mo  ~14h   / ~3.25h
+  { maxMonths: 12, naps: 2, totalSleepMin: 825, daytimeSleepMin: 180 }, // 9–12mo ~13.75h/ ~3h
+  { maxMonths: 15, naps: 2, totalSleepMin: 810, daytimeSleepMin: 165 }, // 12–15mo ~13.5h/ ~2.75h
+  { maxMonths: 18, naps: 1, totalSleepMin: 780, daytimeSleepMin: 150 }, // 15–18mo ~13h  / ~2.5h
+  { maxMonths: 24, naps: 1, totalSleepMin: 750, daytimeSleepMin: 120 }, // 18–24mo ~12.5h/ ~2h
+  { maxMonths: 36, naps: 1, totalSleepMin: 720, daytimeSleepMin: 105 }, // 2–3y   ~12h  / ~1.75h
+  { maxMonths: Infinity, naps: 1, totalSleepMin: 690, daytimeSleepMin: 75 }, // 3y+ ~11.5h
+];
+
+function normFor(ageMonths: number): AgeSleepNorm {
+  return (
+    NORMATIVE_SLEEP.find((n) => ageMonths < n.maxMonths) ??
+    NORMATIVE_SLEEP[NORMATIVE_SLEEP.length - 1]
+  );
+}
+
+/** Population target for total sleep per 24h (minutes) at the given age. */
+export function totalSleepTargetMinutes(ageMonths: number): number {
+  return normFor(ageMonths).totalSleepMin;
 }
 
 /** Typical number of naps per day for the given age (used to detect bedtime). */
 export function expectedNapsPerDay(ageMonths: number): number {
-  if (ageMonths < 3) return 5;
-  if (ageMonths < 4) return 4;
-  if (ageMonths < 6) return 3;
-  if (ageMonths < 8) return 3;
-  if (ageMonths < 15) return 2;
-  return 1;
+  return normFor(ageMonths).naps;
 }
 
-/** Age-appropriate typical nap length in minutes (fallback for scheduling). */
+/**
+ * Age-appropriate typical nap length in minutes (used to advance the day
+ * schedule). Smoothed from the daytime-sleep ÷ nap-count norms above — naps
+ * consolidate and lengthen with age toward a single ~2h toddler nap.
+ */
 export function ageNapDurationMinutes(ageMonths: number): number {
-  if (ageMonths < 6) return 45;
-  if (ageMonths < 12) return 75;
+  if (ageMonths < 4) return 60;
+  if (ageMonths < 9) return 75;
   if (ageMonths < 18) return 90;
   return 120;
+}
+
+/**
+ * Age-appropriate average wake window in minutes. Wake windows are not directly
+ * published in the normative literature (there is no official AAP chart), so
+ * these are the widely used pediatric-consensus midpoints, cross-checked for
+ * multi-nap ages against (24h − total sleep) ÷ (naps + 1) from NORMATIVE_SLEEP.
+ * Documented consensus ranges are shown per band. Blended with the child's own
+ * data downstream, so exact values matter less than the shape.
+ */
+export function ageBaselineWakeWindowMinutes(ageMonths: number): number {
+  if (ageMonths < 1) return 50; // 45–60
+  if (ageMonths < 2) return 70; // 60–90
+  if (ageMonths < 3) return 85; // 75–90
+  if (ageMonths < 4) return 100; // 75–120
+  if (ageMonths < 5) return 120; // 105–135
+  if (ageMonths < 7) return 150; // 120–180
+  if (ageMonths < 10) return 175; // 150–195
+  if (ageMonths < 14) return 210; // 180–240
+  if (ageMonths < 18) return 255; // 210–270
+  if (ageMonths < 36) return 300; // 240–330
+  return 345; // 300–360
 }
 
 function mean(xs: number[]): number {
