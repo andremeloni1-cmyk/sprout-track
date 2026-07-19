@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { ApiResponse } from '../../types';
-import { checkTimerExpirations } from '../../../../src/lib/notifications/timerCheck';
+import { checkTimerExpirations, checkSleepWindowNotifications } from '../../../../src/lib/notifications/timerCheck';
 import { runCleanup } from '../../../../src/lib/notifications/cleanup';
 import { isNotificationsEnabled } from '../../../../src/lib/notifications/config';
 
@@ -74,6 +74,14 @@ export async function POST(req: NextRequest) {
     } catch (error) {
       console.error('Error in timer check:', error);
       // Continue with cleanup even if timer check fails
+    }
+
+    // Run sleep-window check to send "next sleep opening soon" heads-ups
+    try {
+      notificationsSent += await checkSleepWindowNotifications();
+    } catch (error) {
+      console.error('Error in sleep window check:', error);
+      // Continue even if the sleep window check fails
     }
 
     // Run cleanup to remove failed subscriptions and old logs

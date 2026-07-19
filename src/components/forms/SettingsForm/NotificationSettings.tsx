@@ -774,6 +774,37 @@ export default function NotificationSettings({
                       </Select>
                     )}
                   </div>
+
+                  {/* Sleep Window Approaching Preference */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <Label
+                        className="text-sm"
+                        htmlFor={`sleep-window-soon-${subscription.id}-${baby.id}`}
+                      >
+                        {t('Sleep Window Approaching')}
+                      </Label>
+                      <Switch
+                        id={`sleep-window-soon-${subscription.id}-${baby.id}`}
+                        checked={
+                          getPreference(
+                            subscription.id,
+                            baby.id,
+                            NotificationEventType.SLEEP_WINDOW_SOON
+                          )?.enabled ?? false
+                        }
+                        onCheckedChange={(checked) =>
+                          handlePreferenceUpdate(
+                            subscription.id,
+                            baby.id,
+                            NotificationEventType.SLEEP_WINDOW_SOON,
+                            { enabled: checked }
+                          )
+                        }
+                        disabled={loading}
+                      />
+                    </div>
+                  </div>
                 </div>
               ))}
             </CardContent>

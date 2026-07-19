@@ -118,6 +118,7 @@ enum NotificationEventType {
   FEED_TIMER_EXPIRED
   DIAPER_TIMER_EXPIRED
   MEDICINE_TIMER_EXPIRED
+  SLEEP_WINDOW_SOON
 }
 
 // Account model for email/password authentication

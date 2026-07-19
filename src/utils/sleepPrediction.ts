@@ -213,6 +213,29 @@ export function estimateNapDurationMinutes(
   return ageNapDurationMinutes(ageMonths);
 }
 
+/**
+ * Decide whether to send a "sleep window opening soon" notification.
+ *
+ * Fires once when the predicted window is about to open (within `leadMinutes`
+ * and not yet reached), and not again for the same window: a window is
+ * considered the same as the last notified one when their starts are within
+ * `toleranceMinutes` (predictions drift slightly as new data arrives).
+ */
+export function sleepWindowNotifyDecision(params: {
+  windowStartMs: number;
+  nowMs: number;
+  leadMinutes: number;
+  lastNotifiedWindowStartMs: number | null;
+  toleranceMinutes?: number;
+}): boolean {
+  const { windowStartMs, nowMs, leadMinutes, lastNotifiedWindowStartMs } = params;
+  const toleranceMinutes = params.toleranceMinutes ?? 45;
+  const minutesUntil = (windowStartMs - nowMs) / MINUTE_MS;
+  if (minutesUntil < 0 || minutesUntil > leadMinutes) return false;
+  if (lastNotifiedWindowStartMs == null) return true;
+  return Math.abs(windowStartMs - lastNotifiedWindowStartMs) > toleranceMinutes * MINUTE_MS;
+}
+
 /** Wake windows grow across the day; the pre-bedtime one is the longest. */
 function positionFactor(napsBefore: number, expectedNaps: number, isBedtime: boolean): number {
   if (isBedtime) return 1.25;
