@@ -3,7 +3,8 @@
  *
  * Predicts the optimal window for a baby's next sleep (nap or bedtime), and the
  * full remaining-day schedule, from their logged sleep history blended with
- * age-appropriate wake-window norms.
+ * age-appropriate wake-window norms, with a sleep-debt nudge from how today's
+ * naps have actually gone.
  *
  * The module is intentionally free of any framework/database/Prisma imports so
  * the logic can be unit-tested in isolation. All times are epoch milliseconds
@@ -51,6 +52,12 @@ export interface SleepPredictionResult extends PredictedSleep {
     /** Age-based baseline wake window (minutes). */
     baselineWakeWindowMinutes: number;
     source: 'age-based' | 'blended' | 'personalized';
+    /**
+     * Sleep-debt multiplier applied to the wake window from today's naps so far
+     * (<1 = shortened because naps ran short, >1 = lengthened after long naps,
+     * 1 = neutral / no naps yet today).
+     */
+    napAdjustmentFactor: number;
   };
 }
 
@@ -267,6 +274,20 @@ export function estimateNapDurationMinutes(
 }
 
 /**
+ * Sleep-debt multiplier for the next wake window based on how today's naps have
+ * gone versus the baby's typical nap length. Short naps (accumulated sleep debt)
+ * pull the next window earlier; long naps push it a little later. Neutral (1)
+ * when there are no naps yet today. Bounded to a gentle ±10–15% so it nudges
+ * rather than dominates.
+ */
+export function napDebtFactor(todayNapDurationsMin: number[], typicalNapMin: number): number {
+  if (todayNapDurationsMin.length === 0 || typicalNapMin <= 0) return 1;
+  const avg = mean(todayNapDurationsMin);
+  const ratio = avg / typicalNapMin;
+  return clamp(1 + 0.3 * (ratio - 1), 0.85, 1.1);
+}
+
+/**
  * Decide whether to send a "sleep window opening soon" notification.
  *
  * Fires once when the predicted window is about to open (within `leadMinutes`
@@ -348,10 +369,11 @@ function buildWindow(
   lastWakeAt: number,
   napsBefore: number,
   ctx: PredictionContext,
+  debtFactor = 1,
 ): PredictedSleep & { predictedWakeWindowMinutes: number } {
   const isBedtime = napsBefore >= ctx.expectedNaps;
   const factor = positionFactor(napsBefore, ctx.expectedNaps, isBedtime);
-  const predictedWakeWindow = clamp(ctx.blendedBase * factor, 20, ctx.capMinutes);
+  const predictedWakeWindow = clamp(ctx.blendedBase * factor * debtFactor, 20, ctx.capMinutes);
   const center = lastWakeAt + predictedWakeWindow * MINUTE_MS;
   return {
     kind: isBedtime ? 'bedtime' : 'nap',
@@ -388,11 +410,20 @@ export function predictNextSleep(input: PredictNextSleepInput): SleepPrediction 
   const ctx = buildContext(input, tuning);
 
   const todayKey = localDayKey(now, timeZone);
-  const napsToday = sleeps.filter(
+  const todayNaps = sleeps.filter(
     (s) => s.type === 'NAP' && s.end != null && localDayKey(s.start, timeZone) === todayKey,
-  ).length;
+  );
+  const napsToday = todayNaps.length;
 
-  const window = buildWindow(lastWakeAt, napsToday, ctx);
+  // Sleep-debt nudge: compare today's naps so far to the baby's typical nap
+  // length and shift the next window earlier (short naps) or later (long naps).
+  const typicalNapMin = estimateNapDurationMinutes(sleeps, now, input.ageMonths, tuning.historyDays);
+  const debtFactor = napDebtFactor(
+    todayNaps.map((s) => ((s.end as number) - s.start) / MINUTE_MS),
+    typicalNapMin,
+  );
+
+  const window = buildWindow(lastWakeAt, napsToday, ctx, debtFactor);
 
   const status: 'upcoming' | 'now' | 'overdue' =
     now < window.windowStart ? 'upcoming' : now <= window.windowEnd ? 'now' : 'overdue';
@@ -421,6 +452,7 @@ export function predictNextSleep(input: PredictNextSleepInput): SleepPrediction 
       predictedWakeWindowMinutes: window.predictedWakeWindowMinutes,
       baselineWakeWindowMinutes: ctx.baseline,
       source,
+      napAdjustmentFactor: debtFactor,
     },
   };
 }
