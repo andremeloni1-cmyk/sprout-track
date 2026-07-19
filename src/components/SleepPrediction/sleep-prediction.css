@@ -1,0 +1,38 @@
+/*
+ * Dark-mode overrides for the Sleep Prediction card.
+ * Light-mode styling is defined with Tailwind via CVA in
+ * sleep-prediction.styles.ts. These `html.dark` rules are controlled by the
+ * app's theme toggle (not the OS preference) — see CLAUDE.md styling notes.
+ */
+
+html.dark .sleep-prediction-upcoming {
+  border-color: rgba(99, 102, 241, 0.25);
+  background-color: rgba(49, 46, 129, 0.35);
+  color: #c7d2fe;
+}
+
+html.dark .sleep-prediction-now {
+  border-color: rgba(139, 92, 246, 0.45);
+  background-color: rgba(76, 29, 149, 0.5);
+  color: #ddd6fe;
+}
+
+html.dark .sleep-prediction-overdue {
+  border-color: rgba(245, 158, 11, 0.35);
+  background-color: rgba(120, 53, 15, 0.35);
+  color: #fde68a;
+}
+
+html.dark .sleep-prediction-icon {
+  background-color: rgba(255, 255, 255, 0.08);
+  color: #a5b4fc;
+}
+
+html.dark .sleep-prediction-overdue .sleep-prediction-icon {
+  color: #fcd34d;
+}
+
+html.dark .sleep-prediction-hint {
+  border-color: rgba(148, 163, 184, 0.25);
+  color: #94a3b8;
+}
